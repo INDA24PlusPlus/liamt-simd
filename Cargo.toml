@@ -1,0 +1,10 @@
+[package]
+name = "liamt-simd"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+criterion = "0.5.1"
+image = "0.25.5"
+microbench = "0.5.0"
+clap = { version = "4", features = ["derive"] }
