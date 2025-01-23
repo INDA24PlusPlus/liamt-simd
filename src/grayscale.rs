@@ -1,4 +1,4 @@
-use criterion::{black_box, Criterion};
+use criterion::Criterion;
 use image::*;
 use std::simd::num::*;
 use std::simd::*;
@@ -6,47 +6,48 @@ use std::simd::*;
 // Grayscale conversion
 pub fn convert(img: DynamicImage, benchmark: bool) -> DynamicImage {
     let img_buf = convert_img_to_vec8(img.clone());
+    let (r, g, b) = convert_to_channels(img_buf.clone());
 
     if benchmark {
         let mut criterion = Criterion::default();
         let mut group = criterion.benchmark_group("grayscales");
 
-        group.bench_function("grayscale no simd", |b| {
-            b.iter(|| {
-                grayscale(black_box(img_buf.clone()));
+        group.bench_function("grayscale no simd", |be| {
+            be.iter(|| {
+                grayscale(r.clone(), g.clone(), b.clone());
             })
         });
 
-        group.bench_function("grayscale simd 8", |b| {
-            b.iter(|| {
-                grayscale_simd_8(black_box(img_buf.clone()));
+        group.bench_function("grayscale simd 8", |be| {
+            be.iter(|| {
+                grayscale_simd_8(r.clone(), g.clone(), b.clone());
             })
         });
 
-        group.bench_function("grayscale simd 16", |b| {
-            b.iter(|| {
-                grayscale_simd_16(black_box(img_buf.clone()));
+        group.bench_function("grayscale simd 16", |be| {
+            be.iter(|| {
+                grayscale_simd_16(r.clone(), g.clone(), b.clone());
             })
         });
 
-        group.bench_function("grayscale simd 32", |b| {
-            b.iter(|| {
-                grayscale_simd_32(black_box(img_buf.clone()));
+        group.bench_function("grayscale simd 32", |be: &mut criterion::Bencher<'_>| {
+            be.iter(|| {
+                grayscale_simd_32(r.clone(), g.clone(), b.clone());
             })
         });
 
-        group.bench_function("grayscale simd 64", |b| {
-            b.iter(|| {
-                grayscale_simd_64(black_box(img_buf.clone()));
+        group.bench_function("grayscale simd 64", |be| {
+            be.iter(|| {
+                grayscale_simd_64(r.clone(), g.clone(), b.clone());
             })
         });
 
         // Make sure all functions return the same result
-        let gray_img_buf = grayscale(img_buf.clone());
-        let gray_img_buf_simd_8 = grayscale_simd_8(img_buf.clone());
-        let gray_img_buf_simd_16 = grayscale_simd_16(img_buf.clone());
-        let gray_img_buf_simd_32 = grayscale_simd_32(img_buf.clone());
-        let gray_img_buf_simd_64 = grayscale_simd_64(img_buf.clone());
+        let gray_img_buf = grayscale(r.clone(), g.clone(), b.clone());
+        let gray_img_buf_simd_8 = grayscale_simd_8(r.clone(), g.clone(), b.clone());
+        let gray_img_buf_simd_16 = grayscale_simd_16(r.clone(), g.clone(), b.clone());
+        let gray_img_buf_simd_32 = grayscale_simd_32(r.clone(), g.clone(), b.clone());
+        let gray_img_buf_simd_64 = grayscale_simd_64(r.clone(), g.clone(), b.clone());
         assert_eq!(gray_img_buf, gray_img_buf_simd_8);
         assert_eq!(gray_img_buf, gray_img_buf_simd_16);
         assert_eq!(gray_img_buf, gray_img_buf_simd_32);
@@ -56,11 +57,11 @@ pub fn convert(img: DynamicImage, benchmark: bool) -> DynamicImage {
     }
 
     println!("Converting image to grayscale...");
-    let gray_img_buf = grayscale(img_buf);
+    let (r_gray, g_gray, b_gray) = grayscale(r.clone(), g.clone(), b.clone());
     let (width, height) = img.dimensions();
 
     // Return grayscale image
-    convert_vec8_to_img(gray_img_buf, width, height)
+    convert_vec8_to_img(convert_from_channels(r_gray, g_gray, b_gray), width, height)
 }
 
 // Convert image to a vec of RGB values
@@ -88,507 +89,167 @@ fn convert_vec8_to_img(buf: Vec<[u8; 3]>, width: u32, height: u32) -> DynamicIma
     img
 }
 
-fn grayscale(pixels: Vec<[u8; 3]>) -> Vec<[u8; 3]> {
-    let mut result = Vec::new();
-    for pixel in pixels {
-        let r = pixel[0] as f32;
-        let g = pixel[1] as f32;
-        let b = pixel[2] as f32;
+// Convert vec of R,G,B u8 to 3 separate vecs
+fn convert_to_channels(buf: Vec<[u8; 3]>) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    let mut r = Vec::new();
+    let mut g = Vec::new();
+    let mut b = Vec::new();
 
-        // Take each pixel and use formula to get the grayscale value given RGB values
-        let gray = (r * 0.299 + g * 0.587 + b * 0.114) as u8;
-
-        result.push([gray, gray, gray]);
+    for pixel in buf {
+        r.push(pixel[0]);
+        g.push(pixel[1]);
+        b.push(pixel[2]);
     }
 
-    result
+    (r, g, b)
 }
 
-// First SIMD implementation, uses f32x8 (vector with 8 f32 values)
-fn grayscale_simd_8(pixels: Vec<[u8; 3]>) -> Vec<[u8; 3]> {
-    let mut result = Vec::new();
+// From three vecs of R,G,B u8 to a vec of the RGB values
+fn convert_from_channels(r: Vec<u8>, g: Vec<u8>, b: Vec<u8>) -> Vec<[u8; 3]> {
+    let mut res = Vec::new();
 
-    // Take chunks of 8 pixels and batch-convert them
-    for chunk in pixels.chunks_exact(8) {
-        // This is very ugly, but also the fastest (performance) way to do it
-        let r = f32x8::from_array([
-            chunk[0][0] as f32,
-            chunk[1][0] as f32,
-            chunk[2][0] as f32,
-            chunk[3][0] as f32,
-            chunk[4][0] as f32,
-            chunk[5][0] as f32,
-            chunk[6][0] as f32,
-            chunk[7][0] as f32,
-        ]);
-
-        let g = f32x8::from_array([
-            chunk[0][1] as f32,
-            chunk[1][1] as f32,
-            chunk[2][1] as f32,
-            chunk[3][1] as f32,
-            chunk[4][1] as f32,
-            chunk[5][1] as f32,
-            chunk[6][1] as f32,
-            chunk[7][1] as f32,
-        ]);
-
-        let b = f32x8::from_array([
-            chunk[0][2] as f32,
-            chunk[1][2] as f32,
-            chunk[2][2] as f32,
-            chunk[3][2] as f32,
-            chunk[4][2] as f32,
-            chunk[5][2] as f32,
-            chunk[6][2] as f32,
-            chunk[7][2] as f32,
-        ]);
-
-        // Multiply each R,G,B with their given weight (0.299 for red, 0.587 for green, 0.114 for blue) and sum them (dot product)
-        let gray = (r * f32x8::splat(0.299) + g * f32x8::splat(0.587) + b * f32x8::splat(0.114))
-            .cast::<u8>();
-        let gray_arr: [u8; 8] = gray.into();
-
-        for c in gray_arr {
-            result.push([c, c, c]);
-        }
+    for i in 0..r.len() {
+        res.push([r[i], g[i], b[i]]);
     }
 
-    // If image are not a multiple of 8 pixels, process the remaining pixels one by one
-    for &[r, g, b] in pixels.chunks_exact(8).remainder() {
-        let gray = ((r as f32) * 0.299 + (g as f32) * 0.587 + (b as f32) * 0.114) as u8;
-        result.push([gray, gray, gray]);
-    }
-
-    result
+    res
 }
 
-// Uses f32x16 (vector with 16 f32 values)
-// Same implentation as above
-fn grayscale_simd_16(pixels: Vec<[u8; 3]>) -> Vec<[u8; 3]> {
-    let mut result = Vec::new();
+fn grayscale(r: Vec<u8>, g: Vec<u8>, b: Vec<u8>) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    let mut res = Vec::new();
 
-    for chunk in pixels.chunks_exact(16) {
-        let r = f32x16::from_array([
-            chunk[0][0] as f32,
-            chunk[1][0] as f32,
-            chunk[2][0] as f32,
-            chunk[3][0] as f32,
-            chunk[4][0] as f32,
-            chunk[5][0] as f32,
-            chunk[6][0] as f32,
-            chunk[7][0] as f32,
-            chunk[8][0] as f32,
-            chunk[9][0] as f32,
-            chunk[10][0] as f32,
-            chunk[11][0] as f32,
-            chunk[12][0] as f32,
-            chunk[13][0] as f32,
-            chunk[14][0] as f32,
-            chunk[15][0] as f32,
-        ]);
-
-        let g = f32x16::from_array([
-            chunk[0][1] as f32,
-            chunk[1][1] as f32,
-            chunk[2][1] as f32,
-            chunk[3][1] as f32,
-            chunk[4][1] as f32,
-            chunk[5][1] as f32,
-            chunk[6][1] as f32,
-            chunk[7][1] as f32,
-            chunk[8][1] as f32,
-            chunk[9][1] as f32,
-            chunk[10][1] as f32,
-            chunk[11][1] as f32,
-            chunk[12][1] as f32,
-            chunk[13][1] as f32,
-            chunk[14][1] as f32,
-            chunk[15][1] as f32,
-        ]);
-
-        let b = f32x16::from_array([
-            chunk[0][2] as f32,
-            chunk[1][2] as f32,
-            chunk[2][2] as f32,
-            chunk[3][2] as f32,
-            chunk[4][2] as f32,
-            chunk[5][2] as f32,
-            chunk[6][2] as f32,
-            chunk[7][2] as f32,
-            chunk[8][2] as f32,
-            chunk[9][2] as f32,
-            chunk[10][2] as f32,
-            chunk[11][2] as f32,
-            chunk[12][2] as f32,
-            chunk[13][2] as f32,
-            chunk[14][2] as f32,
-            chunk[15][2] as f32,
-        ]);
-
-        let gray = (r * f32x16::splat(0.299) + g * f32x16::splat(0.587) + b * f32x16::splat(0.114))
-            .cast::<u8>();
-        let gray_arr: [u8; 16] = gray.into();
-
-        for c in gray_arr {
-            result.push([c, c, c]);
-        }
+    for i in 0..r.len() {
+        // I'm not using floats here because the SIMD implementation will use integers as well
+        let gray = (((r[i] as u32) * 299 + (g[i] as u32) * 587 + (b[i] as u32) * 114) / 1000) as u8;
+        res.push(gray);
     }
 
-    for &[r, g, b] in pixels.chunks_exact(16).remainder() {
-        let gray = ((r as f32) * 0.299 + (g as f32) * 0.587 + (b as f32) * 0.114) as u8;
-        result.push([gray, gray, gray]);
-    }
-
-    result
+    (res.clone(), res.clone(), res.clone())
 }
 
-// Uses f32x32 (vector with 32 f32 values)
-fn grayscale_simd_32(pixels: Vec<[u8; 3]>) -> Vec<[u8; 3]> {
-    let mut result = Vec::new();
+// First SIMD implementation, uses u32x8 (vector with 8 u32 values)
+fn grayscale_simd_8(r: Vec<u8>, g: Vec<u8>, b: Vec<u8>) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    let mut res = Vec::new();
 
-    for chunk in pixels.chunks_exact(32) {
-        let r = f32x32::from_array([
-            chunk[0][0] as f32,
-            chunk[1][0] as f32,
-            chunk[2][0] as f32,
-            chunk[3][0] as f32,
-            chunk[4][0] as f32,
-            chunk[5][0] as f32,
-            chunk[6][0] as f32,
-            chunk[7][0] as f32,
-            chunk[8][0] as f32,
-            chunk[9][0] as f32,
-            chunk[10][0] as f32,
-            chunk[11][0] as f32,
-            chunk[12][0] as f32,
-            chunk[13][0] as f32,
-            chunk[14][0] as f32,
-            chunk[15][0] as f32,
-            chunk[16][0] as f32,
-            chunk[17][0] as f32,
-            chunk[18][0] as f32,
-            chunk[19][0] as f32,
-            chunk[20][0] as f32,
-            chunk[21][0] as f32,
-            chunk[22][0] as f32,
-            chunk[23][0] as f32,
-            chunk[24][0] as f32,
-            chunk[25][0] as f32,
-            chunk[26][0] as f32,
-            chunk[27][0] as f32,
-            chunk[28][0] as f32,
-            chunk[29][0] as f32,
-            chunk[30][0] as f32,
-            chunk[31][0] as f32,
-        ]);
-
-        let g = f32x32::from_array([
-            chunk[0][1] as f32,
-            chunk[1][1] as f32,
-            chunk[2][1] as f32,
-            chunk[3][1] as f32,
-            chunk[4][1] as f32,
-            chunk[5][1] as f32,
-            chunk[6][1] as f32,
-            chunk[7][1] as f32,
-            chunk[8][1] as f32,
-            chunk[9][1] as f32,
-            chunk[10][1] as f32,
-            chunk[11][1] as f32,
-            chunk[12][1] as f32,
-            chunk[13][1] as f32,
-            chunk[14][1] as f32,
-            chunk[15][1] as f32,
-            chunk[16][1] as f32,
-            chunk[17][1] as f32,
-            chunk[18][1] as f32,
-            chunk[19][1] as f32,
-            chunk[20][1] as f32,
-            chunk[21][1] as f32,
-            chunk[22][1] as f32,
-            chunk[23][1] as f32,
-            chunk[24][1] as f32,
-            chunk[25][1] as f32,
-            chunk[26][1] as f32,
-            chunk[27][1] as f32,
-            chunk[28][1] as f32,
-            chunk[29][1] as f32,
-            chunk[30][1] as f32,
-            chunk[31][1] as f32,
-        ]);
-
-        let b = f32x32::from_array([
-            chunk[0][2] as f32,
-            chunk[1][2] as f32,
-            chunk[2][2] as f32,
-            chunk[3][2] as f32,
-            chunk[4][2] as f32,
-            chunk[5][2] as f32,
-            chunk[6][2] as f32,
-            chunk[7][2] as f32,
-            chunk[8][2] as f32,
-            chunk[9][2] as f32,
-            chunk[10][2] as f32,
-            chunk[11][2] as f32,
-            chunk[12][2] as f32,
-            chunk[13][2] as f32,
-            chunk[14][2] as f32,
-            chunk[15][2] as f32,
-            chunk[16][2] as f32,
-            chunk[17][2] as f32,
-            chunk[18][2] as f32,
-            chunk[19][2] as f32,
-            chunk[20][2] as f32,
-            chunk[21][2] as f32,
-            chunk[22][2] as f32,
-            chunk[23][2] as f32,
-            chunk[24][2] as f32,
-            chunk[25][2] as f32,
-            chunk[26][2] as f32,
-            chunk[27][2] as f32,
-            chunk[28][2] as f32,
-            chunk[29][2] as f32,
-            chunk[30][2] as f32,
-            chunk[31][2] as f32,
-        ]);
-
-        let gray = (r * f32x32::splat(0.299) + g * f32x32::splat(0.587) + b * f32x32::splat(0.114))
-            .cast::<u8>();
-        let gray_arr: [u8; 32] = gray.into();
-
-        for c in gray_arr {
-            result.push([c, c, c]);
+    for i in (0..r.len()).step_by(8) {
+        if i + 8 > r.len() {
+            break;
         }
+
+        // Create a vector with 8 u32 values from the RGB values
+        let r_vector = u8x8::from_slice(&r[i..i + 8]).cast::<u32>();
+        let g_vector = u8x8::from_slice(&g[i..i + 8]).cast::<u32>();
+        let b_vector = u8x8::from_slice(&b[i..i + 8]).cast::<u32>();
+
+        // Multiply each element of the vector with the given weight
+        // Then divide by 1000 (Because its * 0.299 and not * 299)
+        let gray = ((r_vector * u32x8::splat(299)
+            + g_vector * u32x8::splat(587)
+            + b_vector * u32x8::splat(114))
+            / u32x8::splat(1000))
+        .cast::<u8>();
+
+        res.extend_from_slice(&gray.to_array());
     }
 
-    for &[r, g, b] in pixels.chunks_exact(32).remainder() {
-        let gray = ((r as f32) * 0.299 + (g as f32) * 0.587 + (b as f32) * 0.114) as u8;
-        result.push([gray, gray, gray]);
+    // And if the RGB values are not a multiple of 8
+    // Then we do individual conversions for each
+    let remainder = r.len() % 8;
+    for i in r.len() - remainder..r.len() {
+        let gray = (((r[i] as u32) * 299 + (g[i] as u32) * 587 + (b[i] as u32) * 114) / 1000) as u8;
+        res.push(gray);
     }
 
-    result
+    (res.clone(), res.clone(), res.clone())
 }
 
-// Uses f32x64 (vector with 64 f32 values)
-fn grayscale_simd_64(pixels: Vec<[u8; 3]>) -> Vec<[u8; 3]> {
-    let mut result = Vec::new();
+// Same as above but with u32x16
+fn grayscale_simd_16(r: Vec<u8>, g: Vec<u8>, b: Vec<u8>) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    let mut res = Vec::new();
 
-    for chunk in pixels.chunks_exact(64) {
-        let r = f32x64::from_array([
-            chunk[0][0] as f32,
-            chunk[1][0] as f32,
-            chunk[2][0] as f32,
-            chunk[3][0] as f32,
-            chunk[4][0] as f32,
-            chunk[5][0] as f32,
-            chunk[6][0] as f32,
-            chunk[7][0] as f32,
-            chunk[8][0] as f32,
-            chunk[9][0] as f32,
-            chunk[10][0] as f32,
-            chunk[11][0] as f32,
-            chunk[12][0] as f32,
-            chunk[13][0] as f32,
-            chunk[14][0] as f32,
-            chunk[15][0] as f32,
-            chunk[16][0] as f32,
-            chunk[17][0] as f32,
-            chunk[18][0] as f32,
-            chunk[19][0] as f32,
-            chunk[20][0] as f32,
-            chunk[21][0] as f32,
-            chunk[22][0] as f32,
-            chunk[23][0] as f32,
-            chunk[24][0] as f32,
-            chunk[25][0] as f32,
-            chunk[26][0] as f32,
-            chunk[27][0] as f32,
-            chunk[28][0] as f32,
-            chunk[29][0] as f32,
-            chunk[30][0] as f32,
-            chunk[31][0] as f32,
-            chunk[32][0] as f32,
-            chunk[33][0] as f32,
-            chunk[34][0] as f32,
-            chunk[35][0] as f32,
-            chunk[36][0] as f32,
-            chunk[37][0] as f32,
-            chunk[38][0] as f32,
-            chunk[39][0] as f32,
-            chunk[40][0] as f32,
-            chunk[41][0] as f32,
-            chunk[42][0] as f32,
-            chunk[43][0] as f32,
-            chunk[44][0] as f32,
-            chunk[45][0] as f32,
-            chunk[46][0] as f32,
-            chunk[47][0] as f32,
-            chunk[48][0] as f32,
-            chunk[49][0] as f32,
-            chunk[50][0] as f32,
-            chunk[51][0] as f32,
-            chunk[52][0] as f32,
-            chunk[53][0] as f32,
-            chunk[54][0] as f32,
-            chunk[55][0] as f32,
-            chunk[56][0] as f32,
-            chunk[57][0] as f32,
-            chunk[58][0] as f32,
-            chunk[59][0] as f32,
-            chunk[60][0] as f32,
-            chunk[61][0] as f32,
-            chunk[62][0] as f32,
-            chunk[63][0] as f32,
-        ]);
-
-        let g = f32x64::from_array([
-            chunk[0][1] as f32,
-            chunk[1][1] as f32,
-            chunk[2][1] as f32,
-            chunk[3][1] as f32,
-            chunk[4][1] as f32,
-            chunk[5][1] as f32,
-            chunk[6][1] as f32,
-            chunk[7][1] as f32,
-            chunk[8][1] as f32,
-            chunk[9][1] as f32,
-            chunk[10][1] as f32,
-            chunk[11][1] as f32,
-            chunk[12][1] as f32,
-            chunk[13][1] as f32,
-            chunk[14][1] as f32,
-            chunk[15][1] as f32,
-            chunk[16][1] as f32,
-            chunk[17][1] as f32,
-            chunk[18][1] as f32,
-            chunk[19][1] as f32,
-            chunk[20][1] as f32,
-            chunk[21][1] as f32,
-            chunk[22][1] as f32,
-            chunk[23][1] as f32,
-            chunk[24][1] as f32,
-            chunk[25][1] as f32,
-            chunk[26][1] as f32,
-            chunk[27][1] as f32,
-            chunk[28][1] as f32,
-            chunk[29][1] as f32,
-            chunk[30][1] as f32,
-            chunk[31][1] as f32,
-            chunk[32][1] as f32,
-            chunk[33][1] as f32,
-            chunk[34][1] as f32,
-            chunk[35][1] as f32,
-            chunk[36][1] as f32,
-            chunk[37][1] as f32,
-            chunk[38][1] as f32,
-            chunk[39][1] as f32,
-            chunk[40][1] as f32,
-            chunk[41][1] as f32,
-            chunk[42][1] as f32,
-            chunk[43][1] as f32,
-            chunk[44][1] as f32,
-            chunk[45][1] as f32,
-            chunk[46][1] as f32,
-            chunk[47][1] as f32,
-            chunk[48][1] as f32,
-            chunk[49][1] as f32,
-            chunk[50][1] as f32,
-            chunk[51][1] as f32,
-            chunk[52][1] as f32,
-            chunk[53][1] as f32,
-            chunk[54][1] as f32,
-            chunk[55][1] as f32,
-            chunk[56][1] as f32,
-            chunk[57][1] as f32,
-            chunk[58][1] as f32,
-            chunk[59][1] as f32,
-            chunk[60][1] as f32,
-            chunk[61][1] as f32,
-            chunk[62][1] as f32,
-            chunk[63][1] as f32,
-        ]);
-
-        let b = f32x64::from_array([
-            chunk[0][2] as f32,
-            chunk[1][2] as f32,
-            chunk[2][2] as f32,
-            chunk[3][2] as f32,
-            chunk[4][2] as f32,
-            chunk[5][2] as f32,
-            chunk[6][2] as f32,
-            chunk[7][2] as f32,
-            chunk[8][2] as f32,
-            chunk[9][2] as f32,
-            chunk[10][2] as f32,
-            chunk[11][2] as f32,
-            chunk[12][2] as f32,
-            chunk[13][2] as f32,
-            chunk[14][2] as f32,
-            chunk[15][2] as f32,
-            chunk[16][2] as f32,
-            chunk[17][2] as f32,
-            chunk[18][2] as f32,
-            chunk[19][2] as f32,
-            chunk[20][2] as f32,
-            chunk[21][2] as f32,
-            chunk[22][2] as f32,
-            chunk[23][2] as f32,
-            chunk[24][2] as f32,
-            chunk[25][2] as f32,
-            chunk[26][2] as f32,
-            chunk[27][2] as f32,
-            chunk[28][2] as f32,
-            chunk[29][2] as f32,
-            chunk[30][2] as f32,
-            chunk[31][2] as f32,
-            chunk[32][2] as f32,
-            chunk[33][2] as f32,
-            chunk[34][2] as f32,
-            chunk[35][2] as f32,
-            chunk[36][2] as f32,
-            chunk[37][2] as f32,
-            chunk[38][2] as f32,
-            chunk[39][2] as f32,
-            chunk[40][2] as f32,
-            chunk[41][2] as f32,
-            chunk[42][2] as f32,
-            chunk[43][2] as f32,
-            chunk[44][2] as f32,
-            chunk[45][2] as f32,
-            chunk[46][2] as f32,
-            chunk[47][2] as f32,
-            chunk[48][2] as f32,
-            chunk[49][2] as f32,
-            chunk[50][2] as f32,
-            chunk[51][2] as f32,
-            chunk[52][2] as f32,
-            chunk[53][2] as f32,
-            chunk[54][2] as f32,
-            chunk[55][2] as f32,
-            chunk[56][2] as f32,
-            chunk[57][2] as f32,
-            chunk[58][2] as f32,
-            chunk[59][2] as f32,
-            chunk[60][2] as f32,
-            chunk[61][2] as f32,
-            chunk[62][2] as f32,
-            chunk[63][2] as f32,
-        ]);
-
-        let gray = (r * f32x64::splat(0.299) + g * f32x64::splat(0.587) + b * f32x64::splat(0.114))
-            .cast::<u8>();
-        let gray_arr: [u8; 64] = gray.into();
-
-        for c in gray_arr {
-            result.push([c, c, c]);
+    for i in (0..r.len()).step_by(16) {
+        if i + 16 > r.len() {
+            break;
         }
+
+        let r_vector = u8x16::from_slice(&r[i..i + 16]).cast::<u32>();
+        let g_vector = u8x16::from_slice(&g[i..i + 16]).cast::<u32>();
+        let b_vector = u8x16::from_slice(&b[i..i + 16]).cast::<u32>();
+
+        let gray = ((r_vector * u32x16::splat(299)
+            + g_vector * u32x16::splat(587)
+            + b_vector * u32x16::splat(114))
+            / u32x16::splat(1000))
+        .cast::<u8>();
+
+        res.extend_from_slice(&gray.to_array());
     }
 
-    for &[r, g, b] in pixels.chunks_exact(64).remainder() {
-        let gray = ((r as f32) * 0.299 + (g as f32) * 0.587 + (b as f32) * 0.114) as u8;
-        result.push([gray, gray, gray]);
+    let remainder = r.len() % 16;
+    for i in r.len() - remainder..r.len() {
+        let gray = (((r[i] as u32) * 299 + (g[i] as u32) * 587 + (b[i] as u32) * 114) / 1000) as u8;
+        res.push(gray);
     }
 
-    result
+    (res.clone(), res.clone(), res.clone())
+}
+
+fn grayscale_simd_32(r: Vec<u8>, g: Vec<u8>, b: Vec<u8>) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    let mut res = Vec::new();
+
+    for i in (0..r.len()).step_by(32) {
+        if i + 32 > r.len() {
+            break;
+        }
+
+        let r_vector = u8x32::from_slice(&r[i..i + 32]).cast::<u32>();
+        let g_vector = u8x32::from_slice(&g[i..i + 32]).cast::<u32>();
+        let b_vector = u8x32::from_slice(&b[i..i + 32]).cast::<u32>();
+
+        let gray = ((r_vector * u32x32::splat(299)
+            + g_vector * u32x32::splat(587)
+            + b_vector * u32x32::splat(114))
+            / u32x32::splat(1000))
+        .cast::<u8>();
+
+        res.extend_from_slice(&gray.to_array());
+    }
+
+    let remainder = r.len() % 32;
+    for i in r.len() - remainder..r.len() {
+        let gray = (((r[i] as u32) * 299 + (g[i] as u32) * 587 + (b[i] as u32) * 114) / 1000) as u8;
+        res.push(gray);
+    }
+
+    (res.clone(), res.clone(), res.clone())
+}
+
+fn grayscale_simd_64(r: Vec<u8>, g: Vec<u8>, b: Vec<u8>) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    let mut res = Vec::new();
+
+    for i in (0..r.len()).step_by(64) {
+        if i + 64 > r.len() {
+            break;
+        }
+
+        let r_vector = u8x64::from_slice(&r[i..i + 64]).cast::<u32>();
+        let g_vector = u8x64::from_slice(&g[i..i + 64]).cast::<u32>();
+        let b_vector = u8x64::from_slice(&b[i..i + 64]).cast::<u32>();
+
+        let gray = ((r_vector * u32x64::splat(299)
+            + g_vector * u32x64::splat(587)
+            + b_vector * u32x64::splat(114))
+            / u32x64::splat(1000))
+        .cast::<u8>();
+
+        res.extend_from_slice(&gray.to_array());
+    }
+
+    let remainder = r.len() % 64;
+    for i in r.len() - remainder..r.len() {
+        let gray = (((r[i] as u32) * 299 + (g[i] as u32) * 587 + (b[i] as u32) * 114) / 1000) as u8;
+        res.push(gray);
+    }
+
+    (res.clone(), res.clone(), res.clone())
 }
