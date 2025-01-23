@@ -9,7 +9,11 @@ pub fn convert(img: DynamicImage, benchmark: bool) -> DynamicImage {
     let (r, g, b) = convert_to_channels(img_buf.clone());
 
     if benchmark {
-        let mut criterion = Criterion::default();
+        let mut criterion = Criterion::default()
+            .sample_size(1000)
+            .warm_up_time(std::time::Duration::from_secs(5))
+            .measurement_time(std::time::Duration::from_secs(10))
+            .significance_level(0.1);
         let mut group = criterion.benchmark_group("grayscales");
 
         group.bench_function("grayscale no simd", |be| {
